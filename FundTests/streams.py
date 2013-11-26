@@ -4,6 +4,7 @@ import scipy
 import pylab
 import pyodbc
 
+#This Login Info is being referenced as a static global name. Need to wrap a namespace so as to ascribe context
 PWD =  'pmanikonda_99'
 DBNAME = 'OracleDB' #DSN for ODBC
 ORACLESTRING = 'DSN=%s;PWD=%s' % (DBNAME, PWD) #oracle connection string
