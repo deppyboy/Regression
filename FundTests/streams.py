@@ -113,27 +113,29 @@ class ReturnStream:
             return ReturnStream(self.startdates[startindex:endindex],self.enddates[startindex:endindex],
                                 self.returns[startindex:endindex])
         else:
-            if index in self.enddates:
-                return self.returns[self.enddates.index(index)]
+            if index in self.enddates: #may be a cleaner approach is to have a hash of dates and returns
+                return self.returns[self.enddates.index(index)] 
             else:
                 return None
 
-    def datereturns(self, overlapdates):
-        """Given a set of dates, return a ReturnStream that includes just those dates."""
+    def datereturns(self, overlapdates):     # Return Stream method
+        """Given a set of overlapdates, return a ReturnStream that includes just those dates.
+        the idea is to find the overlapdates as a subset of the self.enddates and associate to startdate
+        how the accumulation rolls down"""
         accumval = 1.0
         returns = []
         firststartdate = None
-        for dte in self.enddates:
-            dayreturn = self[dte]+1.0
+        for dte in self.enddates:  #if this list is presorted then we can loop over the indices
+            dayreturn = self[dte]+1.0  #the [] operator has been overloaded in return stream class via __getitem__
             if dte in overlapdates:
                 if not(firststartdate):
                     firststartdate = self.startdates[self.enddates.index(dte)]
                     accumval = 1.0
                 returns.append(accumval*dayreturn-1.0)
                 accumval = 1.0
-            else:
+            else:  #roll down the investment with realized return
                 accumval *= dayreturn
-        return ReturnStream([firststartdate]+overlapdates[1:], overlapdates, scipy.asarray(returns))
+        return ReturnStream([firststartdate]+overlapdates[:-1], overlapdates, scipy.asarray(returns))
     
     def __add__(self,otherstream):
         """Add two streams' returns together and returns a new stream."""
@@ -154,7 +156,7 @@ class ReturnStream:
         """Determines the overlapping dates a stream and a list of other streams."""
         overlapdates = self.setdates
         for otherstream in otherstreams:
-            overlapdates = overlapdates & otherstream.setdates
+            overlapdates = overlapdates & otherstream.setdates #intersection of two sets
         overlaplist = list(overlapdates)
         overlaplist.sort()
         return overlaplist
@@ -164,11 +166,11 @@ class ReturnStream:
         pylab.plot(self.enddates, self.returns)
         pylab.show()
 
-class BasicStream(ReturnStream):
+class BasicStream(ReturnStream):             #BasicStream extends ReturnStream class
     def __init__(self, dates, quotes):
         """
-        Constructor for class to hold actual quotes, which are then converted to percent returns.
-        
+        Constructor for class to hold actual quotes,set of quote dates and returns implied by the quotes.
+        dates,quotes are stored as lists and quotes are stored in scipy.ndarray
         Parameters
         ----------
         dates : list of datetimes
@@ -179,9 +181,14 @@ class BasicStream(ReturnStream):
         self.dates = dates
         self.startdates = self.dates[0:-1]
         self.enddates = self.dates[1:]
-        self.setdates = set(self.enddates)
+        self.setdates = set(self.enddates) #this is a set for later operations in return streams
         self.quotes = quotes
-        self.returns = self.quotes[1:]/self.quotes[0:-1]-1.0
+        lenreturns = len(quotes)
+        self.returns = scipy.zeros(shape=(lenreturns-1,1))  
+        #self.returns = self.quotes[1:]/self.quotes[0:-1]-1.0
+        for i in range(0,lenreturns-1):
+            self.returns[i] = (self.quotes[i+1]/float(self.quotes[i]))-1 if self.quotes[i] !=0 else 0
+           
     
     def dayquote(self,key):
         """Returns the quote for a given done or a small number if that quote doesn't exist."""
@@ -190,9 +197,10 @@ class BasicStream(ReturnStream):
         else:
             return 1E-7
         
-def hybridstream(dates1,dates2,quotes1,quotes2):
+def hybridstream(dates1,dates2,quotes1,quotes2):   #stand alone function
     """
     Creates a new stream that represents the maximum of two other basic streams.
+    Currently the function is programmed to handle data related 2 fund streams
     
     Parameters
     ----------
@@ -201,30 +209,39 @@ def hybridstream(dates1,dates2,quotes1,quotes2):
     quotes1, quotes2 : 1-d array
         quotes for both streams
     """
-    st1 = BasicStream(dates1,quotes1)
-    st2 = BasicStream(dates2,quotes2)
-    overlapdts = st1.overlap([st2])
+    st1 = BasicStream(dates1,quotes1) #BASENAV
+    st2 = BasicStream(dates2,quotes2) #PNDY
+    #overlaplist = list(set([date for date in st1.enddates if date in st2.enddates]))
+    overlapdts = st1.overlap([st2])  #overlap method of returnstream class. Common dates of funds date info
     ol1 = st1.datereturns(overlapdts)
     ol2 = st2.datereturns(overlapdts)
-    greatret = (ol1.returns>=ol2.returns)*ol1.returns+(ol2.returns>ol1.returns)*ol2.returns
+    returntest = (ol1.returns>=ol2.returns)
+    greatret = returntest*ol1.returns + (1-returntest)*ol2.returns # dysfunctional
     return ReturnStream(ol1.startdates,ol1.enddates,greatret)
         
 
-def getmarketdatadb(connectstring=ORACLESTRING):
+def getmarketdatadb(connectstring=ORACLESTRING, DBName = 'ODSACT.ACT_RSL_EQTY_PRICE_HIST',
+                    ValuationDateField = 'VALUATION_DT'):
     """Grabs the available market data out of the database,
-    and puts it into a dictionary of return streams."""
+    and puts it into a dictionary of return streams. In case of null values for the field values,they are replaced by 0"""
     cnxn = pyodbc.connect(connectstring)
     c = cnxn.cursor()
-    sql = 'SELECT * FROM ODSACT.ACT_RSL_EQTY_PRICE_HIST_OLD ORDER BY VALUATION_DT;'
-    c.execute(sql)
+    sql = 'SELECT * FROM %s ORDER BY %s;' % (DBName,ValuationDateField)
+#     sql = 'SELECT * FROM ODSACT.ACT_RSL_EQTY_PRICE_HIST ORDER BY VALUATION_DT;'
+    c.execute(sql)  #sql
     dates, spx, rty, eafe, agg, tbill = [],[],[],[],[],[]
-    for row in c.fetchall():
-        dates.append(row.VALUATION_DT)
-        spx.append(float(row.SPTR))
-        rty.append(float(row.RTY))
-        eafe.append(float(row.GDDUEAFE))
-        agg.append(float(row.LBUSTRUU))
-        tbill.append(float(row.CASH))
+    rows = c.fetchmany(100)
+    while rows:
+        for row in rows:                                          # for row in c.fetchall()
+            dates.append(row.VALUATION_DT)  if row.VALUATION_DT is not None else dates.append(datetime.datetime(1900,1,1))
+            if row.VALUATION_DT is None:
+                print 'ValuationDate is NULL.Set to Jan-1-1900'
+            spx.append(float(row.SPTR))     if row.SPTR         is not None else spx.append(0.0)
+            rty.append(float(row.RU20INTR)) if row.RU20INTR     is not None else rty.append(0.0) 
+            eafe.append(float(row.GDDUEAFE))if row.GDDUEAFE     is not None else eafe.append(0.0)
+            agg.append(float(row.LBUSTRUU)) if row.LBUSTRUU     is not None else agg.append(0.0)
+            tbill.append(float(row.CASH))   if row.CASH         is not None else tbill.append(0.0)
+        rows = c.fetchmany(100)
     return {  'SPX'     : BasicStream(dates,scipy.asarray(spx)),
               'RTY'     : BasicStream(dates,scipy.asarray(rty)),
               'EAFE'    : BasicStream(dates,scipy.asarray(eafe)),

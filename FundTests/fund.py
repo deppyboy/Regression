@@ -188,7 +188,28 @@ class Fund:
         dictionary of statistics for backtesting period
         """
         self.regress(trainstart,trainend,mktbasket)
-        return self.stats(backteststart,backtestend,mktbasket)     
+        return self.stats(backteststart,backtestend,mktbasket) 
+    
+    def getNAVInfofromdb(self,tablename,mnemonicstring,oraclestring,company,fundcode):
+        sql = ("SELECT * from %s WHERE company=%s and mnemonic='%s' and fundnum=%s ORDER BY navdate;") \
+                                                                   % (tablename,str(company),mnemonicstring,str(fundcode))
+       
+        conn = pyodbc.connect(oraclestring)
+        c = conn.cursor()
+        c.execute(sql)
+        column_names = [row[0] for row in c.description]
+        datesbase =[]    #need to be removed if we revert back to c.fetchall()
+        navsbase =[]    
+        rows = c.fetchmany(100)
+        navdateindex = column_names.index('NAVDATE')
+        navindex = column_names.index('NAV')
+        
+        while rows:      
+            #datesbase.append([row[navdateindex] for row in rows])  #2
+            datesbase.extend([row[navdateindex] for row in rows])
+            navsbase.extend([row[navindex] for row in rows])        #4 was append prior
+            rows = c.fetchmany(100)
+        return datesbase,navsbase
    
     def plotreturns(self):
         """Plots actual accumulated fund returns."""
@@ -408,18 +429,10 @@ class AdjFund(Fund):
         with the NAVs from PNDY.  This is admittedly a hack, and I need to think of
         a better solution in the future.
         """
-        conn = pyodbc.connect(ORACLESTRING)
-        c = conn.cursor()
-        sql = "SELECT * from funddata WHERE company=%s and mnemonic='BASENAV' and fundnum=%s ORDER BY navdate;" % (str(company),str(fundcode))
-        c.execute(sql)
-        rows = c.fetchall()
-        datesbase = [row[2] for row in rows]
-        navsbase = [row[4] for row in rows]
-        sql = "SELECT * from funddata WHERE company=%s and mnemonic='PNDY' and fundnum=%s ORDER BY navdate;" % (str(company),str(fundcode))
-        c.execute(sql)
-        rows = c.fetchall()
-        datespndy = [row[2] for row in rows]
-        navspndy = [row[4] for row in rows]
+        mnemonics = ['BASENAV','PNDY']
+        FundDBTable = 'tdees.funddata'
+        datesbase,navsbase = self.getNAVInfofromdb(FundDBTable,mnemonics[0],ORACLESTRING,company,fundcode)
+        datespndy,navspndy = self.getNAVInfofromdb(FundDBTable,mnemonics[1],ORACLESTRING,company,fundcode)
         self.stream = streams.hybridstream(datesbase,datespndy,scipy.array(navsbase),scipy.array(navspndy))
         if freq!='D': self.stream = self.stream.changefreq(freq,forcedates=forcedates)
         self.freq = freq
@@ -443,6 +456,7 @@ class AdjFund(Fund):
         self.plot = self.stream.plot
         conn.close()
 
+        
 #these are the funds that aren't available for PNDY.  See the AdjFund Note for more detail.
 basefunds = [825,826,827,850,851,852,853,875,876,877,878,879,880,881,884,885,886,887,888,923,995]
         
@@ -515,13 +529,7 @@ def errreport(startdate, enddate, threshold=0.03):
     
 if __name__=='__main__':
     mkt = streams.getmarketdatadb()
-    #startdt = datetime.datetime(2000,1,1)
-    #enddt = datetime.datetime(2013,6,28)
     startdt = datetime.datetime(2013,6,28)
     enddt = datetime.datetime(2013,9,27)
-    #graballandoutput(startdt,enddt,mkt,asofdate=enddt)
-    #errreport(startdt,enddt,threshold=0.05)
-    #myf = Fund(101,'BASENAV',878)
-    #myf.stats(startdt,enddt,mkt)
-    f = AdjFund(964)
+    f = AdjFund(964) #nothing special about 964. its a place holder
     f.stats(startdt,enddt,mkt)
